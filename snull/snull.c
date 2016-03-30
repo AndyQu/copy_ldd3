@@ -60,6 +60,7 @@ module_param(use_napi, int, 0);
 
 /*
  * A structure representing an in-flight packet.
+ * field "data" has already be allocated memory
  */
 struct snull_packet {
 	struct snull_packet *next;
@@ -79,6 +80,9 @@ module_param(pool_size, int, 0);
 struct snull_priv {
 	struct net_device_stats stats;
 	int status;
+	/* 
+	 * ppool points to the next free packet memory.
+	 */
 	struct snull_packet *ppool;
 	struct snull_packet *rx_queue;  /* List of incoming packets */
 	int rx_int_enabled;
@@ -102,6 +106,7 @@ void snull_setup_pool(struct net_device *dev)
 	int i;
 	struct snull_packet *pkt;
 
+	
 	priv->ppool = NULL;
 	for (i = 0; i < pool_size; i++) {
 		pkt = kmalloc (sizeof (struct snull_packet), GFP_KERNEL);
@@ -130,6 +135,11 @@ void snull_teardown_pool(struct net_device *dev)
 /*
  * Buffer/pool management.
  */
+
+/*
+ * get a free packet unit from snull's packet pool
+ * should figure out a better name
+ */
 struct snull_packet *snull_get_tx_buffer(struct net_device *dev)
 {
 	struct snull_priv *priv = netdev_priv(dev);
@@ -148,6 +158,10 @@ struct snull_packet *snull_get_tx_buffer(struct net_device *dev)
 }
 
 
+/*
+ * put back pkt into snull's packet pool. 
+ * should figure out a better name
+ */
 void snull_release_buffer(struct snull_packet *pkt)
 {
 	unsigned long flags;
@@ -161,6 +175,7 @@ void snull_release_buffer(struct snull_packet *pkt)
 		netif_wake_queue(pkt->dev);
 }
 
+// maybe snull_enqueue_packet is a better name
 void snull_enqueue_buf(struct net_device *dev, struct snull_packet *pkt)
 {
 	unsigned long flags;
@@ -172,6 +187,7 @@ void snull_enqueue_buf(struct net_device *dev, struct snull_packet *pkt)
 	spin_unlock_irqrestore(&priv->lock, flags);
 }
 
+// maybe snull_dequeue_packet is a better name
 struct snull_packet *snull_dequeue_buf(struct net_device *dev)
 {
 	struct snull_priv *priv = netdev_priv(dev);
@@ -208,6 +224,9 @@ int snull_open(struct net_device *dev)
 	 * Assign the hardware address of the board: use "\0SNULx", where
 	 * x is 0 or 1. The first byte is '\0' to avoid being a multicast
 	 * address (the first byte of multicast addrs is odd).
+	 * 
+	 * This is MAC address. Because IFF_NOARP is set, so the kernel will
+	 * not try to get MAC address the this device.
 	 */
 	memcpy(dev->dev_addr, "\0SNUL0", ETH_ALEN);
 	if (dev == snull_devs[1])
@@ -481,7 +500,13 @@ static void snull_hw_tx(char *buf, int len, struct net_device *dev)
 	dest = snull_devs[dev == snull_devs[0] ? 1 : 0];
 	priv = netdev_priv(dest);
 	tx_buffer = snull_get_tx_buffer(dev);
+	//What if tx_buffer is NULL?
 	tx_buffer->datalen = len;
+	/*
+	 * why not use "buf" directly instead of memcpy?
+	 * because the "data" field is an array, so of course can not be assigned as "buf".
+	 * see the definition of "struct snull_packet"
+	 */
 	memcpy(tx_buffer->data, buf, len);
 	snull_enqueue_buf(dest, tx_buffer);
 	if (priv->rx_int_enabled) {
@@ -522,7 +547,10 @@ int snull_tx(struct sk_buff *skb, struct net_device *dev)
 	}
 	dev->trans_start = jiffies; /* save the timestamp */
 
-	/* Remember the skb, so we can free it at interrupt time */
+	/* 
+	 * Remember the skb, so we can free it at interrupt time 
+	 * question: "skb" is allocated by kernel, should we free it in the driver code?
+	 */
 	priv->skb = skb;
 
 	/* actual deliver of data is device-specific, and not shown here */
@@ -540,7 +568,12 @@ void snull_tx_timeout (struct net_device *dev)
 
 	PDEBUG("Transmit timeout at %ld, latency %ld\n", jiffies,
 			jiffies - dev->trans_start);
-        /* Simulate a transmission interrupt to get things moving */
+    /* 
+     * Simulate a transmission interrupt to get things moving 
+     * I have a question here: snull_interrupt(...) will call "dev_kfree_skb(priv->skb)", 
+     * so kernel can no longer use the skb. If the kernel wants to send out the data, it 
+     * has to reconstruct a skb.
+     */
 	priv->status = SNULL_TX_INTR;
 	snull_interrupt(0, dev, NULL);
 	priv->stats.tx_errors++;
@@ -663,6 +696,9 @@ void snull_init(struct net_device *dev)
 	dev->netdev_ops = &snull_netdev_ops;
 	dev->header_ops = &snull_header_ops;
 	/* keep the default flags, just add NOARP */
+	/* No arp protocol, L2 destination address not set. 
+	   see http://man7.org/linux/man-pages/man7/netdevice.7.html
+	*/
 	dev->flags           |= IFF_NOARP;
 	dev->features        |= NETIF_F_HW_CSUM;
 
@@ -720,14 +756,19 @@ int snull_init_module(void)
 			snull_init);
 	snull_devs[1] = alloc_netdev(sizeof(struct snull_priv), "sn%d",
 			snull_init);
-	if (snull_devs[0] == NULL || snull_devs[1] == NULL)
+	if (snull_devs[0] == NULL || snull_devs[1] == NULL){
+		rer = -ENOMEM;
 		goto out;
+	}
 
 	ret = -ENODEV;
 	for (i = 0; i < 2;  i++)
-		if ((result = register_netdev(snull_devs[i])))
+		if ((result = register_netdev(snull_devs[i]))){
 			printk("snull: error %i registering device \"%s\"\n",
 					result, snull_devs[i]->name);
+			ret = -ENODEV;
+		}
+
 		else
 			ret = 0;
    out:
