@@ -274,6 +274,7 @@ void snull_rx(struct net_device *dev, struct snull_packet *pkt)
 {
 	struct sk_buff *skb;
 	struct snull_priv *priv = netdev_priv(dev);
+	struct iphdr *ih;
 
 	/*
 	 * The packet has been retrieved from the transmission
@@ -295,6 +296,18 @@ void snull_rx(struct net_device *dev, struct snull_packet *pkt)
 	skb->ip_summed = CHECKSUM_UNNECESSARY; /* don't check it */
 	priv->stats.rx_packets++;
 	priv->stats.rx_bytes += pkt->datalen;
+
+	
+	//u32 *saddr, *daddr;
+	ih = (struct iphdr *)(pkt->data+sizeof(struct ethhdr));
+	//saddr = &ih->saddr;
+	//daddr = &ih->daddr;
+
+	PDEBUGG("receive packet: %08x --> %08x\n",
+				ntohl(ih->saddr),
+				ntohl(ih->daddr)
+		);
+
 	netif_rx(skb);
   out:
 	return;
@@ -363,8 +376,10 @@ static void snull_regular_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 	/* ... and check with hw if it's really ours */
 
 	/* paranoid */
-	if (!dev)
+	if (!dev){
+		PDEBUG("snull_regular_interrupt: dev is NULL");
 		return;
+	}
 
 	/* Lock the device */
 	priv = netdev_priv(dev);
@@ -383,6 +398,7 @@ static void snull_regular_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 	}
 	if (statusword & SNULL_TX_INTR) {
 		/* a transmission is over: free the skb */
+
 		priv->stats.tx_packets++;
 		priv->stats.tx_bytes += priv->tx_packetlen;
 		dev_kfree_skb(priv->skb);
@@ -463,11 +479,13 @@ static void snull_hw_tx(char *buf, int len, struct net_device *dev)
 	}
 
 	if (1) { /* enable this conditional to look at the data */
-		int i;
 		PDEBUG("len is %i\n" KERN_DEBUG "data:",len);
+		/*
+		int i;
 		for (i=14 ; i<len; i++)
 			printk(" %02x",buf[i]&0xff);
 		printk("\n");
+		*/
 	}
 	/*
 	 * Ethhdr is 14 bytes, but the kernel arranges for iphdr
@@ -477,20 +495,30 @@ static void snull_hw_tx(char *buf, int len, struct net_device *dev)
 	saddr = &ih->saddr;
 	daddr = &ih->daddr;
 
+	PDEBUGG("before ip transform: %08x --> %08x\n",
+				ntohl(ih->saddr),
+				ntohl(ih->daddr)
+		);
+
 	((u8 *)saddr)[2] ^= 1; /* change the third octet (class C) */
 	((u8 *)daddr)[2] ^= 1;
 
 	ih->check = 0;         /* and rebuild the checksum (ip needs it) */
 	ih->check = ip_fast_csum((unsigned char *)ih,ih->ihl);
 
+	PDEBUGG("after ip transform: %08x:%05i --> %08x:%05i\n",
+				ntohl(ih->saddr),ntohs(((struct tcphdr *)(ih+1))->source),
+				ntohl(ih->daddr),ntohs(((struct tcphdr *)(ih+1))->dest));
+	/*
 	if (dev == snull_devs[0])
-		PDEBUGG("%08x:%05i --> %08x:%05i\n",
+		PDEBUGG("after ip transform: %08x:%05i --> %08x:%05i\n",
 				ntohl(ih->saddr),ntohs(((struct tcphdr *)(ih+1))->source),
 				ntohl(ih->daddr),ntohs(((struct tcphdr *)(ih+1))->dest));
 	else
-		PDEBUGG("%08x:%05i <-- %08x:%05i\n",
+		PDEBUGG("after ip transform: %08x:%05i <-- %08x:%05i\n",
 				ntohl(ih->daddr),ntohs(((struct tcphdr *)(ih+1))->dest),
 				ntohl(ih->saddr),ntohs(((struct tcphdr *)(ih+1))->source));
+	*/
 
 	/*
 	 * Ok, now the packet is ready for transmission: first simulate a
