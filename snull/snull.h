@@ -19,6 +19,7 @@
  */
 
 #undef PDEBUG             /* undef it, just in case */
+#define SNULL_DEBUG
 #ifdef SNULL_DEBUG
 #  ifdef __KERNEL__
      /* This one if debugging is on, and kernel space */
@@ -32,7 +33,7 @@
 #endif
 
 #undef PDEBUGG
-#define PDEBUGG(fmt, args...) /* nothing: it's a placeholder */
+#define PDEBUGG(fmt, args...) PDEBUG(fmt, args) /*  define PDEBUGG  as PDEBUG*/
 
 
 /* These are the flags in the statusword */

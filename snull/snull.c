@@ -462,7 +462,7 @@ static void snull_hw_tx(char *buf, int len, struct net_device *dev)
 		return;
 	}
 
-	if (0) { /* enable this conditional to look at the data */
+	if (1) { /* enable this conditional to look at the data */
 		int i;
 		PDEBUG("len is %i\n" KERN_DEBUG "data:",len);
 		for (i=14 ; i<len; i++)
@@ -752,12 +752,13 @@ int snull_init_module(void)
 	snull_interrupt = use_napi ? snull_napi_interrupt : snull_regular_interrupt;
 
 	/* Allocate the devices */
-	snull_devs[0] = alloc_netdev(sizeof(struct snull_priv), "sn%d",
+	//NET_NAME_UNKNOWN is added for ubuntu. alloc_netdev() on ubuntu requires 4 parameters instead of 3
+	snull_devs[0] = alloc_netdev(sizeof(struct snull_priv), "sn%d", NET_NAME_UNKNOWN,
 			snull_init);
-	snull_devs[1] = alloc_netdev(sizeof(struct snull_priv), "sn%d",
+	snull_devs[1] = alloc_netdev(sizeof(struct snull_priv), "sn%d", NET_NAME_UNKNOWN,
 			snull_init);
 	if (snull_devs[0] == NULL || snull_devs[1] == NULL){
-		rer = -ENOMEM;
+		ret = -ENOMEM;
 		goto out;
 	}
 
